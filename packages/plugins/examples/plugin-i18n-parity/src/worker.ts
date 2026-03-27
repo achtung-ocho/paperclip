@@ -23,6 +23,7 @@ type V1PageResult = {
   path: string;
   page_localization_score: number; // 0–1
   still_english_flag: boolean;
+  langAttr: string | null;
   missing?: boolean;
   surfaces: Record<SurfaceName, SurfaceResult>;
   scannedAt: string;
@@ -412,12 +413,14 @@ function scanPage(
 
   const page_localization_score = Math.round(weightedScore * 1000) / 1000;
   const still_english_flag = page_localization_score < 0.5;
+  const langAttr = $("html").attr("lang") ?? null;
 
   return {
     locale,
     path: relPath,
     page_localization_score,
     still_english_flag,
+    langAttr,
     surfaces,
     scannedAt: new Date().toISOString(),
   };
@@ -431,6 +434,7 @@ function missingPage(locale: string, relPath: string): V1PageResult {
     path: relPath,
     page_localization_score: 0,
     still_english_flag: true,
+    langAttr: null,
     missing: true,
     surfaces: {
       meta: emptySurface,
@@ -444,6 +448,99 @@ function missingPage(locale: string, relPath: string): V1PageResult {
     scannedAt: new Date().toISOString(),
   };
 }
+
+// ---------------------------------------------------------------------------
+// UI-normalized types — flatter shape for the dashboard components
+// ---------------------------------------------------------------------------
+
+type UISurfaceEntry = {
+  surface: SurfaceName;
+  english_likelihood: number;
+  status: SurfaceStatus;
+  evidence: string[];
+};
+
+type UIPageResult = {
+  locale: string;
+  path: string;
+  page_localization_score: number;
+  still_english_flag: boolean;
+  langAttr: string | null;
+  missing: boolean;
+  scannedAt: string;
+  surfaces: UISurfaceEntry[];
+  worstSurfaces: SurfaceName[]; // top surfaces by english_likelihood
+};
+
+type UILocaleSummary = {
+  locale: string;
+  total_pages: number;
+  above_threshold: number;
+  flagged_count: number;
+  avg_score: number;
+  pct_above_threshold: number;
+  worst_pages: Array<{ path: string; page_localization_score: number }>;
+};
+
+type UIReport = {
+  scannedAt: string | null;
+  minScore: number;
+  pages: UIPageResult[];
+  summary: UILocaleSummary[];
+};
+
+function normalizeReportForUI(report: V1Report): UIReport {
+  const pages: UIPageResult[] = report.localization.pages.map((p) => {
+    const surfaceEntries: UISurfaceEntry[] = (Object.entries(p.surfaces) as Array<[SurfaceName, SurfaceResult]>).map(
+      ([name, s]) => ({
+        surface: name,
+        english_likelihood: s.english_likelihood,
+        status: s.status,
+        evidence: s.evidence,
+      }),
+    );
+    const worstSurfaces = surfaceEntries
+      .filter((s) => s.english_likelihood > 0.1)
+      .sort((a, b) => b.english_likelihood - a.english_likelihood)
+      .slice(0, 2)
+      .map((s) => s.surface);
+    return {
+      locale: p.locale,
+      path: p.path,
+      page_localization_score: p.page_localization_score,
+      still_english_flag: p.still_english_flag,
+      langAttr: p.langAttr ?? null,
+      missing: p.missing ?? false,
+      scannedAt: p.scannedAt,
+      surfaces: surfaceEntries,
+      worstSurfaces,
+    };
+  });
+
+  const summary: UILocaleSummary[] = Object.entries(report.localization.summary).map(([locale, s]) => ({
+    locale,
+    total_pages: s.total_pages,
+    above_threshold: s.above_threshold,
+    flagged_count: s.total_pages - s.above_threshold,
+    avg_score: s.avg_score,
+    pct_above_threshold: s.total_pages > 0 ? Math.round((s.above_threshold / s.total_pages) * 100) : 0,
+    worst_pages: s.worst_pages,
+  }));
+
+  return {
+    scannedAt: report.generated_at,
+    minScore: report.config.min_score,
+    pages,
+    summary,
+  };
+}
+
+const EMPTY_UI_REPORT: UIReport = {
+  scannedAt: null,
+  minScore: DEFAULT_MIN_SCORE,
+  pages: [],
+  summary: [],
+};
 
 // ---------------------------------------------------------------------------
 // Full scan runner — iterates EN_BASELINE_ROUTES x non-EN locales
@@ -537,10 +634,12 @@ const plugin = definePlugin({
   async setup(ctx: PluginContext) {
     ctx.logger.info("ocho.i18n-parity setup complete");
 
-    // Data handler for UI components
-    ctx.data.register("i18n-parity-report", async () => {
-      if (!latestScanKey) return { pages: [], summary: {}, scannedAt: null };
-      return scanHistory.get(latestScanKey) ?? { pages: [], summary: {}, scannedAt: null };
+    // Data handler for UI components — always returns UIReport shape
+    ctx.data.register("i18n-parity-report", async (): Promise<UIReport> => {
+      if (!latestScanKey) return EMPTY_UI_REPORT;
+      const report = scanHistory.get(latestScanKey);
+      if (!report) return EMPTY_UI_REPORT;
+      return normalizeReportForUI(report);
     });
 
     // Tool: run-scan
@@ -679,19 +778,21 @@ const plugin = definePlugin({
       "create-tickets",
       {
         displayName: "Create Parity Tickets",
-        description: "Creates Paperclip issues for pages below the minScore threshold.",
+        description: "Creates Paperclip issues for pages below the minScore threshold. Accepts optional parentId and goalId to link issues into an existing epic/goal.",
         parametersSchema: {
           type: "object",
           properties: {
             minScore: { type: "number" },
             dryRun: { type: "boolean" },
             maxTickets: { type: "number", description: "Cap on number of tickets to create" },
+            parentId: { type: "string", description: "Optional Paperclip issue ID to use as parent (for subtask grouping)" },
+            goalId: { type: "string", description: "Optional Paperclip goal ID to link tickets to" },
           },
         },
       },
       async (params): Promise<ToolResult> => {
         try {
-          const input = params as { minScore?: number; dryRun?: boolean; maxTickets?: number };
+          const input = params as { minScore?: number; dryRun?: boolean; maxTickets?: number; parentId?: string; goalId?: string };
           if (!latestScanKey) return { error: "No scan report available. Run run-scan first." };
           const report = scanHistory.get(latestScanKey)!;
           const config = await getConfig(ctx);
@@ -712,6 +813,8 @@ const plugin = definePlugin({
               data: {
                 dryRun: true,
                 threshold,
+                parentId: input.parentId ?? null,
+                goalId: input.goalId ?? null,
                 pages: flaggedPages.map((p) => ({ locale: p.locale, path: p.path, page_localization_score: p.page_localization_score })),
               },
             };
@@ -734,6 +837,8 @@ const plugin = definePlugin({
               title: `i18n parity below ${threshold}: ${locale} (${pages.length} pages)`,
               description: `## i18n Parity Issue\n\nLocale **${locale}** has ${pages.length} page(s) with parity score below **${threshold}**.\n\n### Flagged Pages\n${pageList}\n\n*Generated by ocho.i18n-parity on ${report.generated_at}*`,
               priority: "medium",
+              ...(input.parentId ? { parentId: input.parentId } : {}),
+              ...(input.goalId ? { goalId: input.goalId } : {}),
             });
             created.push({ locale, issueId: issue.id });
           }
