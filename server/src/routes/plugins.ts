@@ -139,6 +139,22 @@ const BUNDLED_PLUGIN_EXAMPLES: AvailablePluginExample[] = [
     localPath: "packages/plugins/examples/plugin-kitchen-sink-example",
     tag: "example",
   },
+  {
+    packageName: "@ocho/plugin-gscga",
+    pluginKey: "ocho.gscga",
+    displayName: "GSCGA Connector (Ocho)",
+    description: "Connector plugin that adds agent tools for GSCGA Search Console and GA4 queries using a secret-backed bearer token.",
+    localPath: "packages/plugins/examples/plugin-gscga",
+    tag: "example",
+  },
+  {
+    packageName: "@ocho/plugin-i18n-parity",
+    pluginKey: "ocho.i18n-parity",
+    displayName: "i18n Parity Scanner (Ocho)",
+    description: "Scans localized HTML pages and scores translation parity per surface. Surfaces still-English content across all supported locales.",
+    localPath: "packages/plugins/examples/plugin-i18n-parity",
+    tag: "example",
+  },
 ];
 
 function listBundledPluginExamples(): AvailablePluginExample[] {
