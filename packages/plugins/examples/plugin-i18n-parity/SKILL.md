@@ -58,11 +58,25 @@ Returns: full `V1Report` JSON with `localization.pages[]` and `localization.summ
 
 ### get-report
 
-No parameters. Returns the cached `V1Report` from the last `run-scan` call.
+```json
+{
+  "locale": "sv",        // optional — filter to one locale
+  "minScore": 0.6,       // optional — return only pages below this score
+  "flaggedOnly": true    // optional — return only still_english_flag pages
+}
+```
+
+Returns the cached `V1Report` from the last `run-scan` call, filtered by the given parameters.
 
 ### get-summary
 
-No parameters. Returns `{ locale: string, total_pages, above_threshold, avg_score, worst_pages[] }[]` sorted by `avg_score` ascending.
+```json
+{
+  "locale": "sv"         // optional — filter to a single locale
+}
+```
+
+Returns `{ locale: string, total_pages, above_threshold, avg_score, worst_pages[] }[]` sorted by `avg_score` ascending.
 
 ### get-page-detail
 
@@ -81,14 +95,14 @@ Returns `V1PageResult` with per-surface breakdown:
 ```json
 {
   "minScore": 0.5,         // optional — override config threshold
-  "dryRun": true           // optional — preview without creating
+  "dryRun": true,          // optional — preview without creating
+  "maxTickets": 10,        // optional — cap number of issues created
+  "parentId": "SUD-1375",  // optional — parent issue ID for subtask grouping
+  "goalId": "bfd7a68d-...", // optional — goal ID to link issues to
 }
 ```
 
-Creates one Paperclip issue per page below threshold. Issues are created with:
-- `parentId` = parent locale audit issue (e.g. `SUD-1375` for Swedish)
-- `goalId` = Locale Parity goal
-- Title: `Engineer: translate <path> for /<locale>/`
+Creates one Paperclip issue per locale with pages below the threshold. Pass `parentId` and `goalId` to link tickets into an existing epic/goal. Always run with `dryRun: true` first to preview before filing.
 
 ---
 
@@ -146,6 +160,6 @@ run-scan every week on Monday → create-tickets if avg_score drops
 - **Static HTML only**: Does not scan server-rendered or JavaScript-injected content. Works correctly for sudokuaday.com's static file architecture.
 - **EN stopword heuristic**: False positives possible for short pages (e.g. daily-sudoku pages with minimal text). Use `excludePatterns` to suppress noisy paths.
 - **No incremental cache**: Each `run-scan` is a full re-scan. Large repos (1000+ pages) may take 30–60s.
-- **`create-tickets` parent resolution**: Currently uses a hardcoded locale-to-parentId map inside the worker. Adding a new locale audit parent requires a worker update until a config-driven map is implemented.
+- **`create-tickets` grouping**: Issues are created per-locale (one issue per locale group). Pass `parentId` and `goalId` to link them to an existing epic/goal. Without these, issues are created at the company level with no parent.
 - **Language detection accuracy**: Scores for CJK locales (ja, ko, zh-CN) are more reliable than for structurally Latin-alphabet locales (de, sv, nl) where EN/target overlap is higher. Manual spot-checks recommended for borderline scores (0.6–0.75) in Latin-script locales.
 - **No diff from last scan**: The report contains absolute scores only; the worker does not yet track score changes over time.
