@@ -1242,6 +1242,43 @@ export function issueRoutes(db: Db, storage: StorageService) {
     res.json(released);
   });
 
+  router.post("/issues/:id/board-takeover", async (req, res) => {
+    const id = req.params.id as string;
+
+    if (req.actor.type !== "board") {
+      res.status(403).json({ error: "Board access required" });
+      return;
+    }
+
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, existing.companyId);
+
+    const taken = await svc.boardTakeover(id);
+    if (!taken) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: taken.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "issue.board_takeover",
+      entityType: "issue",
+      entityId: taken.id,
+      details: { previousAssigneeAgentId: existing.assigneeAgentId },
+    });
+
+    res.json(taken);
+  });
+
   router.get("/issues/:id/comments", async (req, res) => {
     const id = req.params.id as string;
     const issue = await svc.getById(id);
