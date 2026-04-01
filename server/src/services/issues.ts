@@ -1420,6 +1420,40 @@ export function issueService(db: Db) {
       return enriched;
     },
 
+    boardTakeover: async (id: string) => {
+      const existing = await db
+        .select()
+        .from(issues)
+        .where(eq(issues.id, id))
+        .then((rows) => rows[0] ?? null);
+
+      if (!existing) return null;
+
+      if (existing.executionRunId) {
+        throw conflict("Issue has an active execution run; use force release first", {
+          issueId: existing.id,
+          executionRunId: existing.executionRunId,
+        });
+      }
+
+      const updated = await db
+        .update(issues)
+        .set({
+          status: "todo",
+          assigneeAgentId: null,
+          assigneeUserId: null,
+          checkoutRunId: null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(issues.id, id), isNull(issues.executionRunId)))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+
+      if (!updated) return null;
+      const [enriched] = await withIssueLabels(db, [updated]);
+      return enriched;
+    },
+
     listLabels: (companyId: string) =>
       db.select().from(labels).where(eq(labels.companyId, companyId)).orderBy(asc(labels.name), asc(labels.id)),
 
